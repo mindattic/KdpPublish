@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>KdpPublish — Control Panel</title>
+    <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+    <div class="ss-panel">
+        <header class="ss-hdr">
+            <div class="ss-hdr-counts" id="counts">— selected · — tracked</div>
+        </header>
+
+        <div class="ss-spinner-wrap" id="loading"><div class="ss-spinner"></div></div>
+
+        <div id="main-body" style="display:none; display:contents;">
+            <div class="ss-toolbar">
+                <button id="btn-select-all">Select All</button>
+                <button id="btn-mark-unpublished">Mark Unpublished</button>
+                <button id="btn-sign-off" title="Sign the selected books off for publishing (the gate a .publish marker file used to be)">Sign Off</button>
+                <button id="btn-hold" title="Hold the selected books back: a run skips them">Hold</button>
+                <button id="btn-import-json" title="Merge tools/kdp JSON (title-ids.json, category trees, logs) into the KDP store">Import JSON</button>
+                <button id="btn-export-json" title="Write the KDP store out as JSON to a new folder under %LocalAppData%\MindAttic\Prose\kdp-export">Export JSON</button>
+                <button id="btn-spectator" title="Capture what you do in the KDP pane as self-healing steps, for writing or fixing a KDP tool from a real session instead of a guess">◉ Spectator Mode</button>
+            </div>
+
+            <div class="ss-checklist">
+                <table class="ss-table">
+                    <thead>
+                        <tr>
+                            <th class="ss-col-check"></th>
+                            <th class="ss-col-code">Code</th>
+                            <th class="ss-col-icons"></th>
+                            <th class="ss-col-version">Ver</th>
+                            <th class="ss-col-status">Status</th>
+                            <th class="ss-col-published">Last Published</th>
+                        </tr>
+                    </thead>
+                    <tbody id="rows"></tbody>
+                </table>
+            </div>
+
+            <button class="ss-start" id="btn-start" disabled>▶ Start Selected (0)</button>
+        </div>
+
+        <div class="ss-log" id="log"></div>
+
+        <div class="ss-modal-backdrop" id="modal-backdrop" style="display:none;">
+            <div class="ss-modal">
+                <div class="ss-modal-header">
+                    <span id="modal-title"></span>
+                    <button id="modal-close">✕</button>
+                </div>
+                <div class="ss-modal-body" id="modal-body"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        (function () {
+            var entries = [];
+            var selected = new Set();
+            var running = false;
+            var everLoaded = false;
+
+            function post(msg) { window.chrome.webview.postMessage(msg); }
+
+            function statusClass(e) {
+                if (e.publicationStatus === 'Publishing') return 'publishing';
+                if (e.needsRepublish) return 'flagged';
+                if (e.publicationStatus === 'Published') return 'ok';
+                if (e.publicationStatus === 'WorkInProgress') return 'wip';
+                return 'warn';
+            }
+
+            function formatPublishedAt(value) {
+                if (!value) return '—';
+                var d = new Date(value);
+                if (isNaN(d.getTime())) return '—';
+                var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+                var hours24 = d.getHours();
+                var ampm = hours24 >= 12 ? 'PM' : 'AM';
+                var hours12 = hours24 % 12; if (hours12 === 0) hours12 = 12;
+                // One line, fixed shape: 2026-10-04 04:28 PM
+                return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+                    + ' ' + pad(hours12) + ':' + pad(d.getMinutes()) + ' ' + ampm;
+            }
+
+            function statusIcon(cls) {
+                if (cls === 'ok') return '✓ ';
+                if (cls === 'flagged') return '⟳ ';
+                if (cls === 'wip') return '⚠ ';
+                if (cls === 'publishing') return '⏳ ';
+                return '';
+            }
+
+            // Fixed universe ordering — anything not in this list (unexpected/new universe
+            // slugs) still renders, just sorted alphabetically after these four.
+            var UNIVERSE_ORDER = ['glmz', 'scry', 'source', 'epic'];
+
+            function groupByUniverse(list) {
+                var groups = {};
+                list.forEach(function (e) {
+                    var key = (e.universe || 'other').toLowerCase();
+                    (groups[key] = groups[key] || []).push(e);
+                });
+                var keys = Object.keys(groups).sort(function (a, b) {
+                    var ia = UNIVERSE_ORDER.indexOf(a), ib = UNIVERSE_ORDER.indexOf(b);
+                    if (ia === -1) ia = UNIVERSE_ORDER.length;
+                    if (ib === -1) ib = UNIVERSE_ORDER.length;
+                    return ia !== ib ? ia - ib : a.localeCompare(b);
+                });
+                return keys.map(function (k) { return { universe: k, items: groups[k] }; });
+            }
+
+            function render() {
+                document.getElementById('counts').textContent = selected.size + ' selected · ' + entries.length + ' tracked';
+                var tbody = document.getElementById('rows');
+                tbody.innerHTML = '';
+
+                groupByUniverse(entries).forEach(function (group) {
+                    var trHeader = document.createElement('tr');
+                    trHeader.className = 'ss-group-row';
+                    var tdHeader = document.createElement('td');
+                    tdHeader.className = 'ss-group-header';
+                    tdHeader.colSpan = 6;
+                    tdHeader.textContent = group.universe.toUpperCase() + ' (' + group.items.length + ')';
+                    trHeader.appendChild(tdHeader);
+                    tbody.appendChild(trHeader);
+
+                    group.items.forEach(function (e) {
+                        var tr = document.createElement('tr');
+                        tr.className = 'ss-row';
+
+                        var tdCheck = document.createElement('td');
+                        tdCheck.className = 'ss-col-check';
+                        var cb = document.createElement('input');
+                        cb.type = 'checkbox';
+                        cb.checked = selected.has(e.code);
+                        cb.addEventListener('change', function () {
+                            if (cb.checked) selected.add(e.code); else selected.delete(e.code);
+                            render();
+                        });
+                        tdCheck.appendChild(cb);
+
+                        var tdCode = document.createElement('td');
+                        tdCode.className = 'ss-col-code';
+                        tdCode.title = e.title + (e.readyToPublish ? '' : ' — not signed off, will be skipped');
+                        tdCode.textContent = e.code;
+
+                        var tdIcons = document.createElement('td');
+                        tdIcons.className = 'ss-col-icons';
+                        var notesBtn = document.createElement('button');
+                        notesBtn.className = 'ss-icon-btn';
+                        notesBtn.title = 'View description.txt';
+                        notesBtn.textContent = '▤';
+                        notesBtn.addEventListener('click', function (ev) { ev.stopPropagation(); openNotesModal(e); });
+                        var coverBtn = document.createElement('button');
+                        coverBtn.className = 'ss-icon-btn';
+                        coverBtn.title = 'Preview cover.jpg';
+                        coverBtn.textContent = '🖼';
+                        coverBtn.addEventListener('click', function (ev) { ev.stopPropagation(); openCoverModal(e); });
+                        tdIcons.appendChild(notesBtn);
+                        tdIcons.appendChild(coverBtn);
+
+                        var tdVer = document.createElement('td');
+                        tdVer.className = 'ss-col-version';
+                        var publishedVer = e.localPublishMarker ? e.localPublishMarker.version : null;
+                        tdVer.textContent = (publishedVer != null && publishedVer !== e.version)
+                            ? ('v' + publishedVer + ' < v' + e.version)
+                            : ('v' + e.version);
+
+                        var tdStatus = document.createElement('td');
+                        tdStatus.className = 'ss-col-status';
+                        var span = document.createElement('span');
+                        var cls = statusClass(e);
+                        span.className = 'ss-status ss-status-' + cls;
+                        span.textContent = statusIcon(cls) + e.publicationStatus;
+                        tdStatus.appendChild(span);
+
+                        var tdPublished = document.createElement('td');
+                        tdPublished.className = 'ss-col-published';
+                        tdPublished.textContent = formatPublishedAt(e.kdpPublishedAt);
+                        if (e.kdpPublishedAt) tdPublished.title = e.kdpPublishedAt;
+
+                        tr.appendChild(tdCheck);
+                        tr.appendChild(tdCode);
+                        tr.appendChild(tdIcons);
+                        tr.appendChild(tdVer);
+                        tr.appendChild(tdStatus);
+                        tr.appendChild(tdPublished);
+                        tbody.appendChild(tr);
+                    });
+                });
+
+                var startBtn = document.getElementById('btn-start');
+                startBtn.textContent = running ? 'Running…' : ('▶ Start Selected (' + selected.size + ')');
+                startBtn.disabled = running || selected.size === 0;
+
+                var selectable = selectableEntries();
+                var allSelected = selectable.length > 0 && selectable.every(function (e) { return selected.has(e.code); });
+                document.getElementById('btn-select-all').textContent = allSelected ? 'Unselect All' : 'Select All';
+            }
+
+            // WorkInProgress books are missing a hard-gate requirement (sign-off,
+            // cover.jpg, description.txt, or an actual .epub) and will always be skipped by a
+            // run — Select All shouldn't check boxes that can't do anything.
+            function selectableEntries() {
+                return entries.filter(function (e) { return e.publicationStatus !== 'WorkInProgress'; });
+            }
+
+            document.getElementById('btn-select-all').addEventListener('click', function () {
+                var selectable = selectableEntries();
+                var allSelected = selectable.length > 0 && selectable.every(function (e) { return selected.has(e.code); });
+                selected = allSelected ? new Set() : new Set(selectable.map(function (e) { return e.code; }));
+                render();
+            });
+            document.getElementById('btn-mark-unpublished').addEventListener('click', function () {
+                if (selected.size === 0) return;
+                post({ action: 'mark-unpublished', codes: Array.from(selected) });
+            });
+            document.getElementById('btn-sign-off').addEventListener('click', function () {
+                if (selected.size === 0) return;
+                post({ action: 'sign-off', codes: Array.from(selected) });
+            });
+            document.getElementById('btn-hold').addEventListener('click', function () {
+                if (selected.size === 0) return;
+                post({ action: 'hold', codes: Array.from(selected) });
+            });
+            document.getElementById('btn-import-json').addEventListener('click', function () {
+                post({ action: 'import-json' });
+            });
+            document.getElementById('btn-export-json').addEventListener('click', function () {
+                post({ action: 'export-json' });
+            });
+            var spectatorOn = false;
+            document.getElementById('btn-spectator').addEventListener('click', function () {
+                spectatorOn = !spectatorOn;
+                post({ action: spectatorOn ? 'start-spectator' : 'stop-spectator' });
+                this.textContent = spectatorOn ? '◉ Stop Spectator Mode' : '◉ Spectator Mode';
+                this.classList.toggle('ss-recording', spectatorOn);
+            });
+            document.getElementById('btn-start').addEventListener('click', function () {
+                post({ action: 'start', codes: Array.from(selected) });
+            });
+
+            function openModal(title, bodyHtml) {
+                document.getElementById('modal-title').textContent = title;
+                document.getElementById('modal-body').innerHTML = bodyHtml;
+                document.getElementById('modal-backdrop').style.display = 'flex';
+            }
+            function closeModal() {
+                document.getElementById('modal-backdrop').style.display = 'none';
+                pendingCoverCode = null;
+            }
+            document.getElementById('modal-close').addEventListener('click', closeModal);
+            document.getElementById('modal-backdrop').addEventListener('click', function (ev) {
+                if (ev.target.id === 'modal-backdrop') closeModal();
+            });
+
+            function escapeHtml(s) {
+                return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            }
+
+            function openNotesModal(e) {
+                var text = e.description && e.description.trim().length > 0 ? e.description : '(no description.txt found)';
+                openModal(e.code + ' — Description', '<pre class="ss-modal-text">' + escapeHtml(text) + '</pre>');
+            }
+
+            // Guards against a stale cover response landing after the user closed the modal or
+            // clicked a different book's cover icon before the previous request came back.
+            var pendingCoverCode = null;
+            function openCoverModal(e) {
+                pendingCoverCode = e.code;
+                openModal(e.code + ' — Cover', '<div class="ss-modal-loading">Loading…</div>');
+                post({ action: 'get-cover', code: e.code });
+            }
+
+            // C# calls these via ExecuteScriptAsync.
+            window.ssPanel = {
+                onManifest: function (entriesJson) {
+                    entries = JSON.parse(entriesJson);
+                    // Only default-select outdated books on the very first load. A later
+                    // refresh (e.g. auto-refresh after a book publishes mid-run) must preserve
+                    // whatever the user currently has checked, just dropping codes that no
+                    // longer exist — otherwise every post-publish status update would silently
+                    // wipe the in-progress selection out from under the user.
+                    if (!everLoaded) {
+                        // Default selection: anything outdated (existing behavior), plus anything
+                        // never published that's been signed off via its .publish marker — so a
+                        // ready-to-go new book (like a freshly-marked JOAN) is picked up without
+                        // the user having to hunt for it in a long per-universe list.
+                        selected = new Set(entries.filter(function (e) {
+                            if (e.publicationStatus === 'Publishing') return false;
+                            return e.needsRepublish || (e.readyToPublish && e.publicationStatus !== 'Published');
+                        }).map(function (e) { return e.code; }));
+                        everLoaded = true;
+                    } else {
+                        var validCodes = new Set(entries.map(function (e) { return e.code; }));
+                        selected = new Set(Array.from(selected).filter(function (c) { return validCodes.has(c); }));
+                    }
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('main-body').style.display = 'contents';
+                    render();
+                },
+                onLog: function (line) {
+                    var div = document.createElement('div');
+                    div.className = 'ss-log-line';
+                    div.textContent = line;
+                    var log = document.getElementById('log');
+                    log.appendChild(div);
+                    log.scrollTop = log.scrollHeight;
+                },
+                onRunState: function (isRunning) {
+                    running = isRunning;
+                    render();
+                },
+                onCoverImage: function (code, dataUri) {
+                    if (code !== pendingCoverCode) return;
+                    if (!dataUri) {
+                        document.getElementById('modal-body').innerHTML = '<div class="ss-modal-loading">(no cover.jpg found)</div>';
+                        return;
+                    }
+                    document.getElementById('modal-body').innerHTML = '<img class="ss-modal-cover" src="' + dataUri + '">';
+                }
+            };
+
+            post({ action: 'ready' });
+        })();
+    </script>
+</body>
+</html>

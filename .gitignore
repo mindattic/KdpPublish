@@ -1,0 +1,16 @@
+# .NET build artifacts
+**/bin/
+**/obj/
+*.user
+
+# KdpPublish --diagnose / --scan-bookshelf one-off DOM snapshots — scratch debugging
+# artifacts, never canon
+tools/kdp/diagnose-*.json
+tools/kdp/bookshelf-scan-*.json
+
+# Runtime logs
+tools/kdp/logs/
+
+# Scratch output
+*.log
+*.out
