@@ -21,7 +21,6 @@
                 <button id="btn-hold" title="Hold the selected books back: a run skips them">Hold</button>
                 <button id="btn-import-json" title="Merge tools/kdp JSON (title-ids.json, category trees, logs) into the KDP store">Import JSON</button>
                 <button id="btn-export-json" title="Write the KDP store out as JSON to a new folder under %LocalAppData%\MindAttic\Prose\kdp-export">Export JSON</button>
-                <button id="btn-spectator" title="Capture what you do in the KDP pane as self-healing steps, for writing or fixing a KDP tool from a real session instead of a guess">◉ Spectator Mode</button>
             </div>
 
             <div class="ss-checklist">
@@ -176,6 +175,7 @@
                         var cls = statusClass(e);
                         span.className = 'ss-status ss-status-' + cls;
                         span.textContent = statusIcon(cls) + e.publicationStatus;
+                        if (e.kdpStatus) span.title = 'On the KDP bookshelf: ' + e.kdpStatus + (e.kdpLiveState ? ' (' + e.kdpLiveState + ')' : '');
                         tdStatus.appendChild(span);
 
                         var tdPublished = document.createElement('td');
@@ -232,13 +232,6 @@
             });
             document.getElementById('btn-export-json').addEventListener('click', function () {
                 post({ action: 'export-json' });
-            });
-            var spectatorOn = false;
-            document.getElementById('btn-spectator').addEventListener('click', function () {
-                spectatorOn = !spectatorOn;
-                post({ action: spectatorOn ? 'start-spectator' : 'stop-spectator' });
-                this.textContent = spectatorOn ? '◉ Stop Spectator Mode' : '◉ Spectator Mode';
-                this.classList.toggle('ss-recording', spectatorOn);
             });
             document.getElementById('btn-start').addEventListener('click', function () {
                 post({ action: 'start', codes: Array.from(selected) });
@@ -323,6 +316,20 @@
                     }
                     document.getElementById('modal-body').innerHTML = '<img class="ss-modal-cover" src="' + dataUri + '">';
                 }
+            };
+
+            // Live Observation (AutoWebNav): what an attached observer (awn-observe) reports for
+            // this pane — the app's own view of itself, not a guess from the DOM.
+            window.__awnObserve = function () {
+                var counts = {};
+                entries.forEach(function (e) { counts[e.publicationStatus] = (counts[e.publicationStatus] || 0) + 1; });
+                return {
+                    running: running,
+                    summary: selected.size + ' selected · ' + entries.length + ' tracked · ' +
+                        Object.keys(counts).map(function (k) { return counts[k] + ' ' + k; }).join(', '),
+                    selected: Array.from(selected),
+                    log: Array.from(document.querySelectorAll('#log .ss-log-line')).map(function (d) { return d.textContent; })
+                };
             };
 
             post({ action: 'ready' });

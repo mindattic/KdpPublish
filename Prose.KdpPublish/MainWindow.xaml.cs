@@ -33,12 +33,23 @@ public partial class MainWindow : Window
 
     private List<KdpManifestEntry> lastManifest = new();
     private IKdpBrowser? kdpBrowser;
-    /// <summary>Spectator Mode for the KDP pane — the shared AutoWebNav capability every
-    /// AutoWebNav host app (JobHunt, Automata, this app) wires up the same way. Captures a real
-    /// session's clicks/typing as self-healing fingerprints, for writing or fixing an IKdpTool
-    /// from ground truth instead of a guess.</summary>
-    private RecorderSession? spectator;
-    private readonly List<RecorderEvent> spectatorEvents = [];
+    /// <summary>Live Observation (AutoWebNav): a CDP port per pane, registered with this PID in
+    /// %LocalAppData%\MindAttic\AutoWebNav\instances, so awn-observe (AutoWebNav/tools) can attach
+    /// to this running instance and report what it is doing. See README "Observing a live run".</summary>
+    private readonly LiveObservation observation = new("KdpPublish");
+
+    /// <summary>Always-on Spectator Mode (AutoWebNav): everything that happens in the KDP pane —
+    /// the person's clicks and the automation's — is saved to Downloads as
+    /// KdpPublish-session-&lt;timestamp&gt;.autowebnav-recording.json, rewritten as it goes and a final
+    /// time when the window closes. Replaced the old Spectator Mode button.</summary>
+    private readonly SessionRecording sessionRecording = new("KdpPublish");
+
+    /// <summary>What KDP's own bookshelf says about each ebook, by titleId and by ASIN, from the
+    /// last idle visit to it — ground truth for the table's status column. See ScanShelfAsync.</summary>
+    private Dictionary<string, ShelfRow> shelfByTitleId = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, ShelfRow> shelfByAsin = new(StringComparer.OrdinalIgnoreCase);
+    private bool shelfScanBusy;
+
     private CancellationTokenSource? runCts;
     private KdpRunLogService? runLog;
     private Guid? currentRunId;
@@ -52,17 +63,11 @@ public partial class MainWindow : Window
     private bool diagnoseTriggered;
     private bool scanBookshelfTriggered;
 
-    /// <summary>CDP debug ports, one per WebView2 browser process — the same mechanism JobHunt
-    /// uses (see MainWindow.PanelDebugPort/BoardDebugPort there): unauthenticated, local-only,
-    /// open for as long as the app runs, so an external tool (Playwright's connectOverCDP, or
-    /// anything speaking CDP) can attach to the LIVE running instance and read or drive its DOM —
-    /// no relaunch, no special argv flags. Distinct from JobHunt's 9366/9367 so both apps can run
-    /// at once without a port clash.</summary>
+    /// <summary>Preferred CDP ports (LiveObservation falls back to a free one if taken, and the
+    /// registry always records the real one). Distinct from JobHunt's 9366/9367 and Automata's
+    /// 9370/9371.</summary>
     private const int PanelDebugPort = 9368;
     private const int BoardDebugPort = 9369;
-
-    private static CoreWebView2EnvironmentOptions DebugPortOptions(int port) =>
-        new() { AdditionalBrowserArguments = $"--remote-debugging-port={port}" };
 
     public MainWindow(string[]? autoRunCodes = null, (string NodeCode, int? MaxDepth, string[] StartPath)? crawlCategories = null, string? probeCategoriesNodeCode = null, (string NodeCode, string Step)? diagnoseRequest = null, bool scanBookshelf = false)
     {
@@ -73,10 +78,13 @@ public partial class MainWindow : Window
         this.diagnoseRequest = diagnoseRequest;
         this.scanBookshelf = scanBookshelf;
 
-        // Same convention as JobHunt's MainWindow: the PID in the title tells you, at a glance,
-        // which running instance an attached CDP tool (or Task Manager) is actually talking to —
-        // useful the moment more than one instance is ever running at once.
-        Title = $"KdpPublish - PID: {Environment.ProcessId}";
+        // "KdpPublish - PID: n" — which running instance an observer is attached to, at a glance.
+        Title = observation.WindowTitle;
+        Closed += (_, _) =>
+        {
+            sessionRecording.Dispose();   // final write of the session recording to Downloads
+            observation.Dispose();        // leave the instance registry
+        };
 
 #if DEBUG
         KeyDown += (_, e) =>
@@ -97,7 +105,7 @@ public partial class MainWindow : Window
             "MindAttic", "KdpPublish", "ControlPanelWebView2");
         Directory.CreateDirectory(userDataFolder);
 
-        var env = await CoreWebView2Environment.CreateAsync(userDataFolder: userDataFolder, options: DebugPortOptions(PanelDebugPort));
+        var env = await CoreWebView2Environment.CreateAsync(userDataFolder: userDataFolder, options: observation.OptionsFor("panel", PanelDebugPort));
         await ControlPanel.EnsureCoreWebView2Async(env);
 
         var wwwroot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
@@ -119,7 +127,7 @@ public partial class MainWindow : Window
             "MindAttic", "KdpPublish", "WebView2");
         Directory.CreateDirectory(userDataFolder);
 
-        var env = await CoreWebView2Environment.CreateAsync(userDataFolder: userDataFolder, options: DebugPortOptions(BoardDebugPort));
+        var env = await CoreWebView2Environment.CreateAsync(userDataFolder: userDataFolder, options: observation.OptionsFor("board", BoardDebugPort));
         await KdpBrowser.EnsureCoreWebView2Async(env);
 
         // Any "open in new window" request (target="_blank", window.open(), etc.) redirects
@@ -147,15 +155,17 @@ public partial class MainWindow : Window
             args.Accept();
         };
 
-        // Spectator Mode rides along on every document, dormant until armed from the control
-        // panel — same mechanism and wire protocol as Automata's "● Record" and JobHunt's
-        // Spectator Mode toggle, since this capability lives once in AutoWebNav and every host
-        // app adopts it the same way.
-        spectator = new RecorderSession(KdpBrowser.CoreWebView2);
-        await spectator.InstallAsync();
-        spectator.EventCaptured += evt => spectatorEvents.Add(evt);
-        KdpBrowser.CoreWebView2.NavigationCompleted += (_, _) =>
-            _ = spectator.OnNavigatedAsync(KdpBrowser.CoreWebView2.Source);
+        // Always-on session recording of this pane (installToolkit: the KDP pane's own surface
+        // doesn't install AutoWebNav's fingerprinting toolkit, and the recorder needs it).
+        await sessionRecording.AttachAsync("board", KdpBrowser.CoreWebView2, installToolkit: true);
+
+        // Every idle visit to the bookshelf: 50 rows per page, then read each ebook's real status
+        // off it for the table. Never during a run — the operator searches this same page.
+        KdpBrowser.CoreWebView2.NavigationCompleted += async (_, args) =>
+        {
+            if (args.IsSuccess && KdpBrowser.CoreWebView2.Source.Contains("/bookshelf", StringComparison.OrdinalIgnoreCase))
+                await RefreshShelfAsync();
+        };
 
         KdpBrowser.CoreWebView2.Navigate("https://kdp.amazon.com/en_US/bookshelf");
 
@@ -531,12 +541,6 @@ public partial class MainWindow : Window
                 case "export-json":
                     await ExportJsonAsync();
                     break;
-                case "start-spectator":
-                    await StartSpectatorAsync();
-                    break;
-                case "stop-spectator":
-                    await StopSpectatorAsync();
-                    break;
             }
         }
         catch (Exception ex)
@@ -594,32 +598,162 @@ public partial class MainWindow : Window
         await PostLogAsync($"Exported JSON to {to}: {counts}.");
     }
 
-    private async Task StartSpectatorAsync()
+    /// <summary>One ebook row as KDP's own bookshelf shows it right now.</summary>
+    private sealed record ShelfRow(string TitleId, string? Asin, string Title, string? Label, string? Stage, string? LiveState);
+
+    /// <summary>
+    /// On an idle bookshelf visit: switch to 50 rows per page (so nearly every book is on one
+    /// page), then read each ebook row's real status and refresh the table from it. Skipped while a
+    /// run is active — the operator searches this same page and must not have it changed under it.
+    /// </summary>
+    private async Task RefreshShelfAsync()
     {
-        if (spectator == null) { await PostLogAsync("⚠ KDP pane isn't ready yet — can't start Spectator Mode."); return; }
-        spectatorEvents.Clear();
-        await spectator.ArmAsync();
-        await PostLogAsync("◉ Spectator Mode — perform the actions to capture, then stop it.");
+        if (kdpBrowser == null || runCts != null || shelfScanBusy) return;
+        shelfScanBusy = true;
+        try
+        {
+            await Task.Delay(1500);   // the bookshelf table renders after NavigationCompleted
+            if (runCts != null) return;
+            if (await EnsureFiftyPerPageAsync()) await Task.Delay(3500);
+            if (runCts != null) return;
+            if (await ScanShelfAsync()) await RefreshManifestAsync();
+        }
+        catch (Exception ex)
+        {
+            await PostLogAsync($"⚠ Bookshelf read failed: {ex.Message}");
+        }
+        finally { shelfScanBusy = false; }
     }
 
-    private async Task StopSpectatorAsync()
+    /// <summary>True when it changed the page size (the table then reloads). Opening the AUI
+    /// dropdown first is what makes its option links clickable — confirmed live 2026-10-04.</summary>
+    private async Task<bool> EnsureFiftyPerPageAsync()
     {
-        if (spectator == null) return;
-        await spectator.DisarmAsync();
-        var steps = RecordingBuilder.Build(spectatorEvents);
-        spectatorEvents.Clear();
-        if (steps.Count == 0) { await PostLogAsync("Spectator Mode stopped — nothing was captured."); return; }
-
-        var path = Path.Combine(KnownFolders.Downloads, $"kdp-{DateTime.Now:yyyyMMdd-HHmmss}{RecordingExport.FileExtension}");
-        await File.WriteAllTextAsync(path, RecordingExport.Export(steps, DateTimeOffset.Now));
-        await PostLogAsync($"Spectator Mode stopped — {steps.Count} step(s) captured, saved to {path}.");
+        // The pager renders well after NavigationCompleted on a cold start — confirmed live: at a
+        // fixed 1.5 s it wasn't there yet and the step silently did nothing. Wait for it.
+        for (var i = 0; i < 20; i++)
+        {
+            var present = await kdpBrowser!.EvalAsync(
+                "document.getElementById('refreshedbookshelftable-records-per-page-dropdown') ? 'yes' : 'no'", CancellationToken.None);
+            if (present.Contains("yes")) break;
+            await Task.Delay(500);
+        }
+        // Through the dropdown's native <select> (value + change event), not by clicking the
+        // popover's option link: confirmed live 2026-10-04 that this works without opening the
+        // popover, while the click route silently did nothing on a cold start. Retried, and
+        // verified against the button's own label, because Amazon's handler may not be bound yet.
+        const string SetFifty = """
+            (function () {
+                var b = document.getElementById('refreshedbookshelftable-records-per-page-dropdown');
+                var s = document.getElementById('refreshedbookshelftable-records-per-page-dropdown-option');
+                if (!b || !s) return 'missing';
+                if (/50 Per Page/.test(b.textContent)) return 'done';
+                s.value = '50';
+                s.dispatchEvent(new Event('change', { bubbles: true }));
+                return 'set';
+            })()
+            """;
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            var result = await kdpBrowser.EvalAsync(SetFifty, CancellationToken.None);
+            if (result.Contains("done")) return attempt > 0;
+            if (result.Contains("missing")) return false;
+            await Task.Delay(1500);
+            var now = await kdpBrowser.EvalAsync(
+                "(document.getElementById('refreshedbookshelftable-records-per-page-dropdown') || {}).textContent || ''", CancellationToken.None);
+            if (now.Contains("50 Per Page"))
+            {
+                await PostLogAsync("Bookshelf set to 50 per page.");
+                return true;
+            }
+        }
+        await PostLogAsync("⚠ Couldn't switch the bookshelf to 50 per page — reading the rows that are showing.");
+        return false;
     }
+
+    /// <summary>
+    /// Reads every ebook row on the bookshelf. Each row's action links carry KDP's own JSON
+    /// (data-link-parameters: titleId, asin, stage LIVE/NOT_LIVE, liveState CURRENTLY_LIVE/
+    /// HAS_BEEN_LIVE/NOT_LIVE), and the row shows the status label a person sees ("Live", "Draft",
+    /// "In review", "Live Updates publishing"). Print-format rows are ignored.
+    /// </summary>
+    private async Task<bool> ScanShelfAsync()
+    {
+        var json = await kdpBrowser!.EvalAsync("""
+            (function () {
+                var out = [];
+                var els = document.querySelectorAll('[data-link-parameters]');
+                for (var i = 0; i < els.length; i++) {
+                    var p; try { p = JSON.parse(els[i].getAttribute('data-link-parameters')); } catch (e) { continue; }
+                    if (!p || !p.titleId || !/digital/.test((p.action || '') + (p.id || ''))) continue;
+                    if (out.some(function (o) { return o.titleId === p.titleId; })) continue;
+                    var card = els[i];
+                    while (card.parentElement && ((card.innerText || '').match(/Kindle eBook/g) || []).length < 1) card = card.parentElement;
+                    while (card.parentElement && ((card.parentElement.innerText || '').match(/Kindle eBook/g) || []).length === 1) card = card.parentElement;
+                    var text = (card.innerText || '').replace(/\s+/g, ' ');
+                    var m = text.match(/Kindle eBook (Live Updates publishing|Live|Draft|In [Rr]eview|Publishing|Blocked|Unpublished)/);
+                    var a = text.match(/ASIN:\s*([A-Z0-9]{10})/);
+                    out.push({ titleId: p.titleId, asin: p.asin || (a ? a[1] : null), title: p.title || '',
+                               label: m ? m[1] : null, stage: p.stage || null, liveState: p.liveState || null });
+                }
+                return JSON.stringify(out);
+            })()
+            """, CancellationToken.None);
+        // EvalAsync hands back the script's string; tolerate it arriving JSON-quoted as well.
+        if (json.StartsWith('"')) json = JsonDocument.Parse(json).RootElement.GetString() ?? "[]";
+        var rows = JsonSerializer.Deserialize<List<ShelfRow>>(json, JsonOpts) ?? [];
+        if (rows.Count == 0) return false;
+        shelfByTitleId = rows.ToDictionary(r => r.TitleId, StringComparer.OrdinalIgnoreCase);
+        shelfByAsin = rows.Where(r => !string.IsNullOrEmpty(r.Asin)).GroupBy(r => r.Asin!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        await PostLogAsync($"Read {rows.Count} ebook(s) off the KDP bookshelf: {rows.Count(r => r.Label == "Live")} Live, " +
+                           $"{rows.Count(r => r.Label == "Draft")} Draft, {rows.Count(r => r.Label is not ("Live" or "Draft"))} other.");
+        return true;
+    }
+
+    /// <summary>The book's row on the bookshelf: by ASIN first (stable for a published book), then
+    /// by titleId — the KDP store's titleId has been seen to go stale (TWD/TWU/PXL, 2026-10-04).</summary>
+    private ShelfRow? ShelfRowFor(KdpManifestEntry e)
+    {
+        var asin = e.Asin ?? e.LocalPublishMarker?.Asin;
+        if (!string.IsNullOrEmpty(asin) && shelfByAsin.TryGetValue(asin, out var byAsin)) return byAsin;
+        if (!string.IsNullOrEmpty(e.KdpTitleId) && shelfByTitleId.TryGetValue(e.KdpTitleId, out var byId)) return byId;
+        return null;
+    }
+
+    /// <summary>The table's status from what KDP itself shows, when the book is on the bookshelf;
+    /// otherwise the manifest's own computation. "Live" with a newer version on disk is still
+    /// "Outdated" — live, but behind.</summary>
+    private static string StatusFromShelf(ShelfRow row, KdpManifestEntry e) => row.Label switch
+    {
+        "Live" => e.NeedsRepublish ? "Outdated" : "Published",
+        "Live Updates publishing" or "In review" or "In Review" or "Publishing" => "Publishing",
+        "Draft" when row.LiveState == "HAS_BEEN_LIVE" => "Draft (was live)",
+        "Draft" => "Draft",
+        null => e.PublicationStatus,
+        var other => other,
+    };
 
     private async Task RefreshManifestAsync()
     {
         var manifestService = App.Services.GetRequiredService<KdpManifestService>();
         lastManifest = await manifestService.BuildAsync(KdpManifestService.FindRepoRoot());
-        var json = JsonSerializer.Serialize(lastManifest, JsonOpts);
+        // The panel gets each entry plus what the bookshelf says: publicationStatus is replaced by
+        // KDP's own status when the book was found there, and kdpStatus carries KDP's raw label.
+        var rows = new System.Text.Json.Nodes.JsonArray();
+        foreach (var e in lastManifest)
+        {
+            var node = JsonSerializer.SerializeToNode(e, JsonOpts)!.AsObject();
+            if (ShelfRowFor(e) is { } row)
+            {
+                node["publicationStatus"] = StatusFromShelf(row, e);
+                node["kdpStatus"] = row.Label;
+                node["kdpLiveState"] = row.LiveState;
+                node["shelfTitleId"] = row.TitleId;
+            }
+            rows.Add(node);
+        }
+        var json = rows.ToJsonString();
         // json becomes a JS string ARGUMENT here — encode it as a JS string literal (the page's
         // onManifest does JSON.parse on it), not inline it as a JS object literal.
         var jsArg = JsonSerializer.Serialize(json);

@@ -27,18 +27,39 @@ rebuild, publish, writes a self-redeploying `launch.bat`):
 powershell -ExecutionPolicy Bypass -File Prose.KdpPublish\tools\deploy.ps1 -Launch
 ```
 
-## Interactivity (CDP)
+## Observing a live run
 
-Every run opens two unauthenticated, local-only Chrome DevTools Protocol ports — one per
-WebView2 browser process (same mechanism as JobHunt's `PanelDebugPort`/`BoardDebugPort`):
+KdpPublish uses AutoWebNav's Live Observation and Session Recording (see the
+[AutoWebNav README](https://github.com/mindattic/AutoWebNav#live-observation)), the same as
+JobHunt and Automata:
 
-- `9368` — the control panel pane
-- `9369` — the KDP browser pane
+- The window title shows the instance's PID (`KdpPublish - PID: <n>`), and the app registers
+  itself in `%LocalAppData%\MindAttic\AutoWebNav\instances` with a local CDP port per pane:
+  `panel` (preferred 9368) and `board`, the KDP site (preferred 9369).
+- The control panel exposes `window.__awnObserve`: whether a run is going, a one-line summary
+  (selected / tracked / counts by status), the selected codes, and the panel log.
+- Follow it from the AutoWebNav repo:
 
-The window title shows the running instance's PID (`KdpPublish - PID: <n>`). An external
-tool (Playwright's `chromium.connectOverCDP('http://127.0.0.1:9369')`, or anything else
-that speaks CDP) can attach to the **already-running** app and read or drive its live DOM —
-no relaunch, no special command-line flags needed first.
+  ```text
+  node tools/awn-observe.mjs status kdp           both panes now: run state, summary, log tail, KDP page
+  node tools/awn-observe.mjs watch kdp            live: every log line, navigation and state change
+  node tools/awn-observe.mjs shot kdp --pane board
+  ```
+
+- Every session is recorded: everything done in the KDP pane, by you or by the automation, is
+  saved to Downloads as `KdpPublish-session-<timestamp>.autowebnav-recording.json`, rewritten as
+  it goes and a final time when the window closes. (This replaced the Spectator Mode button.)
+
+## Status from the KDP bookshelf
+
+Whenever the KDP pane lands on the bookshelf and no run is going, the app switches it to 50
+books per page and reads each ebook row's status straight off KDP — the JSON KDP puts on each
+row's action links (`titleId`, `asin`, `stage`, `liveState`) and the label you see (Live,
+Draft, In review, Live Updates publishing). The table's Status column then shows that, matched
+to each book by ASIN first and titleId second: Live → Published (or Outdated when a newer
+version is on disk), Draft after having been live → "Draft (was live)", In review / Updates
+publishing → Publishing. Hover a status for KDP's raw label. Books not on the bookshelf keep
+the manifest's own status.
 
 ## One-off diagnostic launch modes
 
