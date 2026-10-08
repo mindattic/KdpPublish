@@ -174,7 +174,6 @@ html, body {
 
 .ss-row td { padding: 3px 6px; vertical-align: middle; overflow: hidden; }
 .ss-row:hover { background: #F0F2F2; }
-.ss-row input[type="checkbox"] { cursor: pointer; }
 .ss-col-code { color: #0F1111; font-weight: 700; white-space: nowrap; }
 .ss-col-version { color: #565959; }
 .ss-col-published { color: #565959; white-space: nowrap; }
@@ -185,6 +184,25 @@ html, body {
 .ss-status-warn { background: #FDECEA; color: #C40000; }
 .ss-status-wip { background: #EDEDED; color: #565959; }
 .ss-status-publishing { background: #E7F0FD; color: #0868B0; }
+
+/* Per-row publish intent: a read-only checkmark (confirmed published), a warning (held but
+   still live — flagged for a manual takedown, see KdpReconcileService), or a toggle a user
+   clicks to sign off/hold a not-yet-live book. Replaces the old plain <input type=checkbox>. */
+.ss-check-glyph {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 16px; height: 16px; font-size: 11px; line-height: 1;
+    background: none; border: none; padding: 0; cursor: default;
+}
+.ss-check-ok { color: #067D34; cursor: default; }
+.ss-check-warn { color: #C40000; cursor: pointer; }
+.ss-check-toggle {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 16px; height: 16px; font-size: 11px; line-height: 1;
+    background: none; border: 1px solid #888C8C; border-radius: 50%; color: #888C8C;
+    padding: 0; cursor: pointer;
+}
+.ss-check-toggle:hover { border-color: #007185; color: #007185; }
+.ss-check-toggle-on { border-color: #067D34; color: #067D34; }
 
 .ss-start {
     margin: 8px 9px; padding: 8px; background: #FFD814; color: #0F1111; border: 1px solid #FCD200;

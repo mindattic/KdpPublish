@@ -8,17 +8,13 @@
 <body>
     <div class="ss-panel">
         <header class="ss-hdr">
-            <div class="ss-hdr-counts" id="counts">— selected · — tracked</div>
+            <div class="ss-hdr-counts" id="counts">— tracked</div>
         </header>
 
         <div class="ss-spinner-wrap" id="loading"><div class="ss-spinner"></div></div>
 
         <div id="main-body" style="display:none; display:contents;">
             <div class="ss-toolbar">
-                <button id="btn-select-all">Select All</button>
-                <button id="btn-mark-unpublished">Mark Unpublished</button>
-                <button id="btn-sign-off" title="Sign the selected books off for publishing (the gate a .publish marker file used to be)">Sign Off</button>
-                <button id="btn-hold" title="Hold the selected books back: a run skips them">Hold</button>
                 <button id="btn-import-json" title="Merge tools/kdp JSON (title-ids.json, category trees, logs) into the KDP store">Import JSON</button>
                 <button id="btn-export-json" title="Write the KDP store out as JSON to a new folder under %LocalAppData%\MindAttic\Prose\kdp-export">Export JSON</button>
             </div>
@@ -39,7 +35,7 @@
                 </table>
             </div>
 
-            <button class="ss-start" id="btn-start" disabled>▶ Start Selected (0)</button>
+            <button class="ss-start" id="btn-start">▶ Run Sequential Pass</button>
         </div>
 
         <div class="ss-log" id="log"></div>
@@ -58,9 +54,7 @@
     <script>
         (function () {
             var entries = [];
-            var selected = new Set();
             var running = false;
-            var everLoaded = false;
 
             function post(msg) { window.chrome.webview.postMessage(msg); }
 
@@ -93,6 +87,54 @@
                 return '';
             }
 
+            // Replaces the old per-row checkbox: a book's "want it live" intent is now the
+            // persisted Sign-Off/Hold gate (e.readyToPublish) rather than an in-page selection, so
+            // each row shows exactly one of three states instead of a checkbox:
+            //   - confirmed published (ground truth matched this run, or the status column
+            //     already says Published) -> a read-only checkmark, nothing to click.
+            //   - held but still live (readyToPublish=false yet PublishUrl is set) -> a warning
+            //     glyph; automated unpublish isn't built yet, so this just flags it for a human —
+            //     take it down by hand on kdp.amazon.com, then click Mark Unpublished here.
+            //   - anything else (not yet live) -> a toggle icon reflecting readyToPublish, posting
+            //     the existing sign-off/hold actions for just this one row.
+            function buildCheckCell(e) {
+                if (e.heldButLive) {
+                    var warn = document.createElement('button');
+                    warn.className = 'ss-check-glyph ss-check-warn';
+                    warn.textContent = '⚠';
+                    warn.title = 'Live on KDP but held. Automated unpublish isn’t built yet — take it down by hand on kdp.amazon.com, then click this to mark it unpublished locally.';
+                    warn.addEventListener('click', function (ev) {
+                        ev.stopPropagation();
+                        post({ action: 'mark-unpublished', codes: [e.code] });
+                    });
+                    return warn;
+                }
+                // Published per the manifest/bookshelf, and not contradicted by a ground-truth
+                // check THIS run (kdpGroundTruthMatchesExpected is only set once a pass has
+                // actually visited the book and found it stale — see KdpReconcileService).
+                var confirmedPublished = e.publicationStatus === 'Published' && e.kdpGroundTruthMatchesExpected !== false;
+                if (confirmedPublished) {
+                    var ok = document.createElement('span');
+                    ok.className = 'ss-check-glyph ss-check-ok';
+                    ok.textContent = '✓';
+                    ok.title = e.kdpGroundTruthCheckedAt
+                        ? 'Confirmed live as of this run’s sequential pass.'
+                        : 'Published, per the last manifest/bookshelf read.';
+                    return ok;
+                }
+                var toggle = document.createElement('button');
+                toggle.className = 'ss-check-toggle' + (e.readyToPublish ? ' ss-check-toggle-on' : '');
+                toggle.textContent = e.readyToPublish ? '●' : '○';
+                toggle.title = e.readyToPublish
+                    ? 'Signed off — included in the next sequential pass. Click to hold it back.'
+                    : 'Held back — a pass skips it. Click to sign it off for the next pass.';
+                toggle.addEventListener('click', function (ev) {
+                    ev.stopPropagation();
+                    post({ action: e.readyToPublish ? 'hold' : 'sign-off', codes: [e.code] });
+                });
+                return toggle;
+            }
+
             // Fixed universe ordering — anything not in this list (unexpected/new universe
             // slugs) still renders, just sorted alphabetically after these four.
             var UNIVERSE_ORDER = ['glmz', 'scry', 'source', 'epic'];
@@ -113,7 +155,7 @@
             }
 
             function render() {
-                document.getElementById('counts').textContent = selected.size + ' selected · ' + entries.length + ' tracked';
+                document.getElementById('counts').textContent = entries.length + ' tracked';
                 var tbody = document.getElementById('rows');
                 tbody.innerHTML = '';
 
@@ -133,14 +175,7 @@
 
                         var tdCheck = document.createElement('td');
                         tdCheck.className = 'ss-col-check';
-                        var cb = document.createElement('input');
-                        cb.type = 'checkbox';
-                        cb.checked = selected.has(e.code);
-                        cb.addEventListener('change', function () {
-                            if (cb.checked) selected.add(e.code); else selected.delete(e.code);
-                            render();
-                        });
-                        tdCheck.appendChild(cb);
+                        tdCheck.appendChild(buildCheckCell(e));
 
                         var tdCode = document.createElement('td');
                         tdCode.className = 'ss-col-code';
@@ -194,39 +229,10 @@
                 });
 
                 var startBtn = document.getElementById('btn-start');
-                startBtn.textContent = running ? 'Running…' : ('▶ Start Selected (' + selected.size + ')');
-                startBtn.disabled = running || selected.size === 0;
-
-                var selectable = selectableEntries();
-                var allSelected = selectable.length > 0 && selectable.every(function (e) { return selected.has(e.code); });
-                document.getElementById('btn-select-all').textContent = allSelected ? 'Unselect All' : 'Select All';
+                startBtn.textContent = running ? 'Running…' : '▶ Run Sequential Pass';
+                startBtn.disabled = running || entries.length === 0;
             }
 
-            // WorkInProgress books are missing a hard-gate requirement (sign-off,
-            // cover.jpg, description.txt, or an actual .epub) and will always be skipped by a
-            // run — Select All shouldn't check boxes that can't do anything.
-            function selectableEntries() {
-                return entries.filter(function (e) { return e.publicationStatus !== 'WorkInProgress'; });
-            }
-
-            document.getElementById('btn-select-all').addEventListener('click', function () {
-                var selectable = selectableEntries();
-                var allSelected = selectable.length > 0 && selectable.every(function (e) { return selected.has(e.code); });
-                selected = allSelected ? new Set() : new Set(selectable.map(function (e) { return e.code; }));
-                render();
-            });
-            document.getElementById('btn-mark-unpublished').addEventListener('click', function () {
-                if (selected.size === 0) return;
-                post({ action: 'mark-unpublished', codes: Array.from(selected) });
-            });
-            document.getElementById('btn-sign-off').addEventListener('click', function () {
-                if (selected.size === 0) return;
-                post({ action: 'sign-off', codes: Array.from(selected) });
-            });
-            document.getElementById('btn-hold').addEventListener('click', function () {
-                if (selected.size === 0) return;
-                post({ action: 'hold', codes: Array.from(selected) });
-            });
             document.getElementById('btn-import-json').addEventListener('click', function () {
                 post({ action: 'import-json' });
             });
@@ -234,7 +240,7 @@
                 post({ action: 'export-json' });
             });
             document.getElementById('btn-start').addEventListener('click', function () {
-                post({ action: 'start', codes: Array.from(selected) });
+                post({ action: 'run-pass' });
             });
 
             function openModal(title, bodyHtml) {
@@ -272,26 +278,9 @@
             // C# calls these via ExecuteScriptAsync.
             window.ssPanel = {
                 onManifest: function (entriesJson) {
+                    // No selection to preserve or default anymore — readyToPublish (sign-off) is
+                    // the persisted source of truth, straight from the manifest every load.
                     entries = JSON.parse(entriesJson);
-                    // Only default-select outdated books on the very first load. A later
-                    // refresh (e.g. auto-refresh after a book publishes mid-run) must preserve
-                    // whatever the user currently has checked, just dropping codes that no
-                    // longer exist — otherwise every post-publish status update would silently
-                    // wipe the in-progress selection out from under the user.
-                    if (!everLoaded) {
-                        // Default selection: anything outdated (existing behavior), plus anything
-                        // never published that's been signed off via its .publish marker — so a
-                        // ready-to-go new book (like a freshly-marked JOAN) is picked up without
-                        // the user having to hunt for it in a long per-universe list.
-                        selected = new Set(entries.filter(function (e) {
-                            if (e.publicationStatus === 'Publishing') return false;
-                            return e.needsRepublish || (e.readyToPublish && e.publicationStatus !== 'Published');
-                        }).map(function (e) { return e.code; }));
-                        everLoaded = true;
-                    } else {
-                        var validCodes = new Set(entries.map(function (e) { return e.code; }));
-                        selected = new Set(Array.from(selected).filter(function (c) { return validCodes.has(c); }));
-                    }
                     document.getElementById('loading').style.display = 'none';
                     document.getElementById('main-body').style.display = 'contents';
                     render();
@@ -325,9 +314,8 @@
                 entries.forEach(function (e) { counts[e.publicationStatus] = (counts[e.publicationStatus] || 0) + 1; });
                 return {
                     running: running,
-                    summary: selected.size + ' selected · ' + entries.length + ' tracked · ' +
+                    summary: entries.length + ' tracked · ' +
                         Object.keys(counts).map(function (k) { return counts[k] + ' ' + k; }).join(', '),
-                    selected: Array.from(selected),
                     log: Array.from(document.querySelectorAll('#log .ss-log-line')).map(function (d) { return d.textContent; })
                 };
             };

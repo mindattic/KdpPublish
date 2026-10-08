@@ -6,7 +6,7 @@
     (tools/publish-all.ps1) to always have a fresh, independent deployed copy.
 
 .DESCRIPTION
-    1. Stops any running Prose.KdpPublish.exe process.
+    1. Stops any running KdpPublish.exe process.
     2. Removes this project's own bin/obj — a clean, timestamp-independent rebuild, not an
        incremental one. Prose.Core is a vendored package (lib/local-packages), not a
        sibling source tree, since this app was decoupled from the Prose monorepo
@@ -35,15 +35,15 @@ param([switch]$Launch)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$projDir = Split-Path $PSScriptRoot   # tools\ -> Prose.KdpPublish\
-$proj    = Join-Path $projDir 'Prose.KdpPublish.csproj'
+$projDir = Split-Path $PSScriptRoot   # tools\ -> KdpPublish\
+$proj    = Join-Path $projDir 'KdpPublish.csproj'
 $out     = 'C:\Apps\KdpPublish'
-$exeName = 'Prose.KdpPublish.exe'
+$exeName = 'KdpPublish.exe'
 
 # ── Stop running instance ──────────────────────────────────────────────────
 Write-Host ''
 Write-Host '  Stopping running instance...' -ForegroundColor Yellow
-$procs = Get-Process 'Prose.KdpPublish' -ErrorAction SilentlyContinue
+$procs = Get-Process 'KdpPublish' -ErrorAction SilentlyContinue
 if ($procs) {
     $procs | Stop-Process -Force
     Write-Host "    Stopped ($(@($procs).Count) process(es))" -ForegroundColor DarkYellow

@@ -17,14 +17,14 @@ app needs.
 ## Build & run
 
 ```
-dotnet build Prose.KdpPublish\Prose.KdpPublish.csproj -c Release
+dotnet build KdpPublish\KdpPublish.csproj -c Release
 ```
 
 Deploy a standalone copy to `C:\Apps\KdpPublish\` (stops any running instance, clean
 rebuild, publish, writes a self-redeploying `launch.bat`):
 
 ```
-powershell -ExecutionPolicy Bypass -File Prose.KdpPublish\tools\deploy.ps1 -Launch
+powershell -ExecutionPolicy Bypass -File KdpPublish\tools\deploy.ps1 -Launch
 ```
 
 ## Observing a live run
@@ -63,17 +63,18 @@ the manifest's own status.
 
 ## One-off diagnostic launch modes
 
-- `Prose.KdpPublish.exe --diagnose <CODE> [details|content|pricing]` — read-only DOM
+- `KdpPublish.exe --diagnose <CODE> [details|content|pricing]` — read-only DOM
   snapshot of a book's KDP page (buttons, checkboxes, dialogs, banners, iframes, body
   text), written to `tools/kdp/diagnose-<CODE>-<step>-<timestamp>.json`.
-- `Prose.KdpPublish.exe --scan-bookshelf` — reads the real per-book status KDP's own
+- `KdpPublish.exe --scan-bookshelf` — reads the real per-book status KDP's own
   bookshelf page displays (Live / In Review / Draft / etc.), written to
   `tools/kdp/bookshelf-scan-<timestamp>.json`. Ground truth over local bookkeeping.
-- `Prose.KdpPublish.exe --crawl-categories <CODE> <level0> [level1] [...]` /
+- `KdpPublish.exe --crawl-categories <CODE> <level0> [level1] [...]` /
   `--probe-categories <CODE>` — one-off, read-only documentation passes over KDP's live
   Categories modal (see `CategoryTreeCrawler` in Prose.Core).
-- `Prose.KdpPublish.exe <CODE1>,<CODE2>,...` — auto-starts the same `RunSelectedAsync` flow
-  the panel's Start button triggers, once the manifest loads.
+- `KdpPublish.exe <CODE1>,<CODE2>,...` — auto-starts the same sequential reconciliation
+  pass the panel's "Run Sequential Pass" button triggers, scoped to just these codes, once the
+  manifest loads.
 
 All of the above never click or type anything except the auto-run codes mode, which drives
 the real publish automation.

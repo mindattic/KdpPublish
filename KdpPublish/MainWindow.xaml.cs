@@ -11,7 +11,7 @@ using Prose.Core.Kdp;
 using Prose.Core.Services;
 using Prose.Core.Services.Operator;
 
-namespace Prose.KdpPublish;
+namespace KdpPublish;
 
 /// <summary>
 /// Both panes are plain WebView2 + vanilla JS. The control panel (wwwroot/panel.html) was
@@ -49,6 +49,11 @@ public partial class MainWindow : Window
     private Dictionary<string, ShelfRow> shelfByTitleId = new(StringComparer.OrdinalIgnoreCase);
     private Dictionary<string, ShelfRow> shelfByAsin = new(StringComparer.OrdinalIgnoreCase);
     private bool shelfScanBusy;
+
+    /// <summary>What the sequential reconciliation pass actually read off KDP's Content page for
+    /// each book it visited, keyed by Code — ground truth for the panel's checkmark, same
+    /// per-run-only lifetime as shelfByTitleId/shelfByAsin. See RunReconcilePassAsync.</summary>
+    private readonly Dictionary<string, KdpReconcileService.GroundTruthResult> groundTruthByCode = new(StringComparer.OrdinalIgnoreCase);
 
     private CancellationTokenSource? runCts;
     private KdpRunLogService? runLog;
@@ -515,12 +520,11 @@ public partial class MainWindow : Window
                         // up rather than aborting on a kdpBrowser==null race.
                         for (var i = 0; i < 50 && kdpBrowser == null; i++)
                             await Task.Delay(200);
-                        _ = RunSelectedAsync(autoRunCodes);
+                        _ = RunReconcilePassAsync(autoRunCodes);
                     }
                     break;
-                case "start":
-                    var codes = msg!["codes"]!.AsArray().Select(n => n!.GetValue<string>()).ToHashSet();
-                    _ = RunSelectedAsync(codes);
+                case "run-pass":
+                    _ = RunReconcilePassAsync();
                     break;
                 case "mark-unpublished":
                     var unpublishCodes = msg!["codes"]!.AsArray().Select(n => n!.GetValue<string>()).ToHashSet();
@@ -751,6 +755,27 @@ public partial class MainWindow : Window
                 node["kdpLiveState"] = row.LiveState;
                 node["shelfTitleId"] = row.TitleId;
             }
+
+            // Ground truth from this session's sequential pass, if it's visited this book yet —
+            // what drives the panel's read-only checkmark (see KdpReconcileService).
+            if (groundTruthByCode.TryGetValue(e.Code, out var ground))
+            {
+                node["kdpGroundTruthFilename"] = ground.Filename;
+                node["kdpGroundTruthLastModified"] = ground.LastModifiedText;
+                node["kdpGroundTruthCheckedAt"] = ground.CheckedAt;
+                node["kdpGroundTruthMatchesExpected"] = ground.MatchesExpected;
+            }
+
+            // Pure function of already-known manifest fields — no live visit needed: a book
+            // that's held (never signed off, or explicitly Held) but still shows as Published is
+            // exactly the case the sequential pass flags rather than acting on (see
+            // KdpReconcileService's remarks — automated unpublish isn't built yet). Keyed off the
+            // same computed publicationStatus the status pill already shows (not PublishUrl,
+            // which Mark Unpublished deliberately never clears) so clicking Mark Unpublished after
+            // a manual takedown correctly clears this flag too.
+            var effectiveStatus = node["publicationStatus"]?.GetValue<string>() ?? e.PublicationStatus;
+            node["heldButLive"] = !e.ReadyToPublish && effectiveStatus == "Published";
+
             rows.Add(node);
         }
         var json = rows.ToJsonString();
@@ -815,7 +840,14 @@ public partial class MainWindow : Window
         await ControlPanel.CoreWebView2.ExecuteScriptAsync($"window.ssPanel.onCoverImage({jsCode}, {jsData})");
     }
 
-    private async Task RunSelectedAsync(HashSet<string> codes)
+    /// <summary>
+    /// The "▶ Run Sequential Pass" action: sweeps the whole roster (or, if
+    /// <paramref name="onlyCodes"/> is given — the CLI auto-run convenience — just those codes),
+    /// in manifest order, via <see cref="KdpReconcileService"/>. Replaced the old subset-driven
+    /// RunSelectedAsync/RunSelectedCoreAsync: there is no ephemeral "selected" concept left to
+    /// pass in — every signed-off book is visited and either confirmed or fixed every pass.
+    /// </summary>
+    private async Task RunReconcilePassAsync(IReadOnlySet<string>? onlyCodes = null)
     {
         if (kdpBrowser == null)
         {
@@ -833,7 +865,7 @@ public partial class MainWindow : Window
         runCts = new CancellationTokenSource();
         try
         {
-            await RunSelectedCoreAsync(codes, runCts.Token);
+            await RunReconcilePassCoreAsync(onlyCodes, runCts.Token);
         }
         catch (Exception ex)
         {
@@ -855,83 +887,35 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task RunSelectedCoreAsync(HashSet<string> codes, CancellationToken ct)
+    private async Task RunReconcilePassCoreAsync(IReadOnlySet<string>? onlyCodes, CancellationToken ct)
     {
         await SetRunningAsync(true);
 
+        var toRun = onlyCodes == null ? lastManifest : lastManifest.Where(e => onlyCodes.Contains(e.Code)).ToList();
+
         runLog = App.Services.GetRequiredService<KdpRunLogService>();
-        currentRunId = runLog.StartRun(KdpManifestService.FindRepoRoot(), codes);
+        currentRunId = runLog.StartRun(KdpManifestService.FindRepoRoot(), toRun.Select(e => e.Code).ToHashSet());
 
-        var operatorService = App.Services.GetRequiredService<KdpOperatorService>();
-        // RunSelectedAsync refuses to start before the pane exists, so this cannot be null here.
+        var reconcileService = App.Services.GetRequiredService<KdpReconcileService>();
+        // RunReconcilePassAsync refuses to start before the pane exists, so this cannot be null here.
         var ctx = new KdpOperatorContext { Browser = kdpBrowser ?? throw new InvalidOperationException("KDP browser pane is not ready.") };
-        var toRun = lastManifest.Where(e => codes.Contains(e.Code)).ToList();
-        await PostLogAsync($"Starting run: {toRun.Count} book(s) — {string.Join(", ", toRun.Select(e => e.Code))}");
+        await PostLogAsync($"Starting sequential pass: {toRun.Count} book(s) in the roster.");
 
-        foreach (var book in toRun)
+        try
         {
-            if (ct.IsCancellationRequested) break;
-
-            // Human-controlled gate: the book's sign-off in the KDP store (was: a .publish marker
-            // file in its export folder). Authoritative — refuse to process a book lacking it even
-            // if it was checked in the UI, so a full automated sweep can never touch something
-            // nobody signed off on.
-            if (!book.ReadyToPublish)
-            {
-                await PostLogAsync($"{book.Code}: skipped — not signed off for publish (Sign Off, or prose --kdp-signoff --code {book.Code}).");
-                continue;
-            }
-
-            // Local fast-path: the KDP store already records this exact manuscript filename as
-            // successfully published — skip opening the browser at all rather than spending a
-            // whole run just to reach Content and discover the same thing three steps in.
-            if (book.UpToDateViaLocalMarker)
-            {
-                await PostLogAsync($"{book.Code}: skipped — the KDP store already shows \"{book.LocalPublishMarker?.File}\" published (current version on disk matches).");
-                continue;
-            }
-
-            // Same hard gate KdpOperatorService enforces authoritatively (this is a cheap early
-            // skip so the log says WHY before a browser session even opens) — cover.jpg,
-            // description.txt, and a strictly-newer .epub version than what's on record.
-            if (!book.HasCover)
-            {
-                await PostLogAsync($"{book.Code}: skipped — no cover.jpg in {book.FolderPath}.");
-                continue;
-            }
-            if (!book.HasDescriptionFile)
-            {
-                await PostLogAsync($"{book.Code}: skipped — no description.txt in {book.FolderPath}.");
-                continue;
-            }
-            if (!book.HasNewerVersionThanPublished)
-            {
-                await PostLogAsync($"{book.Code}: skipped — .epub version {book.Version} is not newer than what's already recorded as published.");
-                continue;
-            }
-
-            await PostLogAsync($"— {book.Code} — {book.Title} —");
-            try
-            {
-                await foreach (var evt in operatorService.ProcessBookAsync(book, ctx, ct))
-                    await PostLogAsync(FormatEvent(book.Code, evt));
-            }
-            catch (OperationCanceledException)
-            {
-                await PostLogAsync($"{book.Code}: cancelled.");
-                break;
-            }
-            catch (Exception ex)
-            {
-                await PostLogAsync($"{book.Code}: unexpected failure — {ex.Message}");
-            }
-
-            // Re-pull the manifest so a book that just got mark_published'd immediately shows
-            // its real status (no longer flagged Outdated) instead of waiting for a manual
-            // Refresh click. onManifest preserves the current selection on this non-first load.
-            await RefreshManifestAsync();
+            await foreach (var (code, evt) in reconcileService.RunAsync(toRun, ctx, groundTruthByCode, ct))
+                await PostLogAsync(FormatEvent(code, evt));
+        }
+        catch (OperationCanceledException)
+        {
+            await PostLogAsync("Pass cancelled.");
         }
 
+        // Re-pull the manifest once at the end (every book was already visited in sequence above;
+        // a per-book refresh isn't needed since the pass itself already reflects each confirm/
+        // publish/skip as it goes via the log) so the panel's checkmarks/ground-truth columns
+        // reflect this run's results.
+        await RefreshManifestAsync();
         await PostLogAsync(KdpRunLogFormat.FinishedMessage);
     }
 

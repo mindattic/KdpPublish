@@ -3,7 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Prose.Core.Extensions;
 
-namespace Prose.KdpPublish;
+namespace KdpPublish;
 
 /// <summary>
 /// Same DI shape as the CLI's <c>BuildCoreServices</c> (Host.CreateDefaultBuilder +
@@ -95,9 +95,10 @@ public partial class App : Application
         }
 
         // Optional: a comma-separated NodeCode list as argv[0] auto-starts the exact same
-        // RunSelectedAsync flow the panel's Start button triggers, once the manifest loads — a
-        // way to exercise the real automation end-to-end without a human click, e.g.
-        // `Prose.KdpPublish.exe MXG,NXR`. Not a special/shortcut code path: it drives the
+        // RunReconcilePassAsync flow the panel's "Run Sequential Pass" button triggers, scoped to
+        // just these codes, once the manifest loads — a way to exercise the real automation
+        // end-to-end without a human click, e.g.
+        // `KdpPublish.exe MXG,NXR`. Not a special/shortcut code path: it drives the
         // same KdpOperatorService/KdpToolRegistry tools against the same live WebView2 pane.
         var autoRunCodes = e.Args.Length > 0 ? e.Args[0].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) : null;
         new MainWindow(autoRunCodes).Show();

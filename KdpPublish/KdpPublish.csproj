@@ -15,7 +15,7 @@
     <!-- Decoupled from the Prose monorepo 2026-10-04 — Prose.Core is now a vendored package
          (see NuGet.config / lib/local-packages), not a sibling ProjectReference. Repack and
          bump the version here when this app needs a newer Prose.Core. -->
-    <PackageReference Include="Prose.Core" Version="1.0.0" />
+    <PackageReference Include="Prose.Core" Version="1.0.1" />
   </ItemGroup>
 
   <ItemGroup>

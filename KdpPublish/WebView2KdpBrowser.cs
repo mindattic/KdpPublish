@@ -3,7 +3,7 @@ using AutoWebNav.WebView2;
 using Microsoft.Web.WebView2.Core;
 using Prose.Core.Services.Operator;
 
-namespace Prose.KdpPublish;
+namespace KdpPublish;
 
 /// <summary>
 /// Real implementation of <see cref="IKdpBrowser"/> against a live WebView2 pane — a thin adapter
