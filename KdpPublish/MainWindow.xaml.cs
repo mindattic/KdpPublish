@@ -7,6 +7,7 @@ using AutoWebNav;
 using AutoWebNav.WebView2;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Web.WebView2.Core;
+using MindAttic.Export.Artifacts;
 using Prose.Core.Kdp;
 using Prose.Core.Services;
 using Prose.Core.Services.Operator;
@@ -30,6 +31,12 @@ namespace KdpPublish;
 public partial class MainWindow : Window
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
+    // Diagnostic dumps (tools/kdp/*.json): the name is computed exactly and a re-run replaces it.
+    private static readonly ArtifactOptions DumpArtifact = new() { Existing = ExistingArtifact.Overwrite, SanitizeName = false };
+
+    private static Task WriteDumpAsync(string path, string content) =>
+        ArtifactWriter.WriteTextAsync(Path.GetDirectoryName(path)!, Path.GetFileName(path), content, DumpArtifact);
 
     private List<KdpManifestEntry> lastManifest = new();
     private IKdpBrowser? kdpBrowser;
@@ -221,7 +228,7 @@ public partial class MainWindow : Window
 
         var repoRoot = Prose.Core.Services.KdpManifestService.FindRepoRoot();
         var outPath = Path.Combine(repoRoot, "tools", "kdp", $"bookshelf-scan-{DateTime.Now:yyyyMMdd-HHmmss}.json");
-        await File.WriteAllTextAsync(outPath, dump);
+        await WriteDumpAsync(outPath, dump);
         Console.WriteLine($"[scan-bookshelf] Wrote {outPath}");
         Console.WriteLine(dump);
     }
@@ -300,7 +307,7 @@ public partial class MainWindow : Window
 
         var repoRoot = Prose.Core.Services.KdpManifestService.FindRepoRoot();
         var outPath = Path.Combine(repoRoot, "tools", "kdp", $"diagnose-{nodeCode}-{step}-{DateTime.Now:yyyyMMdd-HHmmss}.json");
-        await File.WriteAllTextAsync(outPath, dump);
+        await WriteDumpAsync(outPath, dump);
         Console.WriteLine($"[diagnose] Wrote {outPath}");
         Console.WriteLine(dump);
     }
@@ -447,7 +454,7 @@ public partial class MainWindow : Window
 
         var repoRoot = Prose.Core.Services.KdpManifestService.FindRepoRoot();
         var outPath = System.IO.Path.Combine(repoRoot, "tools", "kdp", "category-probe.json");
-        await System.IO.File.WriteAllTextAsync(outPath, result);
+        await WriteDumpAsync(outPath, result);
         Console.WriteLine($"[probe-categories] Wrote {outPath}");
     }
 
@@ -492,7 +499,7 @@ public partial class MainWindow : Window
             Tree = root,
         });
         var outPath = System.IO.Path.Combine(repoRoot, "tools", "kdp", $"{KdpJsonTransfer.CategoryTreePrefix}{slug}.json");
-        await System.IO.File.WriteAllTextAsync(outPath, KdpJsonTransfer.RenderCategoryTree(root));
+        await WriteDumpAsync(outPath, KdpJsonTransfer.RenderCategoryTree(root));
         Console.WriteLine($"[crawl-categories] Done. Saved '{slug}' to the KDP store and exported {outPath}");
     }
 
