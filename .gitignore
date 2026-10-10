@@ -14,3 +14,6 @@ tools/kdp/logs/
 # Scratch output
 *.log
 *.out
+
+# /quicksave transcript — ephemeral session resume note, not source
+.claude/quicksave.md
