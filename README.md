@@ -20,11 +20,15 @@ app needs.
 dotnet build KdpPublish\KdpPublish.csproj -c Release
 ```
 
-Deploy a standalone copy to `C:\Apps\KdpPublish\` (stops any running instance, clean
-rebuild, publish, writes a self-redeploying `launch.bat`):
+Deploy to `C:\Apps\KdpPublish\` with the repo-root `deploy.ps1`. It republishes only when
+source is newer than the deployed exe (stopping any running instance first), and writes
+`C:\Apps\KdpPublish\deploy.bat`, which the desktop shortcut points at: it runs `deploy.ps1`
+(a fast no-op when nothing changed), then starts `KdpPublish.exe` with its arguments.
 
 ```
-powershell -ExecutionPolicy Bypass -File KdpPublish\tools\deploy.ps1 -Launch
+powershell -ExecutionPolicy Bypass -File deploy.ps1            # publish if changed
+powershell -ExecutionPolicy Bypass -File deploy.ps1 -Force     # clean bin/obj rebuild
+powershell -ExecutionPolicy Bypass -File deploy.ps1 -Launch [args]
 ```
 
 ## Observing a live run
