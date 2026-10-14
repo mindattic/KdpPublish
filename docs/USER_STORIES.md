@@ -22,3 +22,4 @@ _Nothing recorded yet._
 |---|---|---|---|---|---|
 | KP-T1 | 2026-10-12 | docs | closed | Start the permanent ticket log in USER_STORIES.md | — |
 | KP-T2 | 2026-10-13 | fix | closed | Repo-root deploy.ps1 (rebuild only when changed, -Force/-Launch), deploy.bat replaces launch.bat, legacy deploy files removed | deploy.ps1 |
+| KP-T3 | 2026-10-13 | feature | open | Move to MindAttic.Components.Wpf 5.0.0 and turn on McWindow.DarkTitleBar for its windows | MindAttic.Components.Wpf 5.0.0 |
