@@ -2,6 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        xmlns:mc="clr-namespace:MindAttic.Components.Wpf.Controls;assembly=MindAttic.Components.Wpf"
         Title="KdpPublish" Height="1400" Width="1600"
         WindowStartupLocation="Manual" Left="0" Top="0">
     <Grid>
@@ -18,7 +19,16 @@
         <wv2:WebView2 x:Name="ControlPanel" Grid.Column="0" />
 
         <!-- The real KDP browser surface. Persistent user-data folder (set in code-behind) so
-             the Amazon login only has to happen once. -->
-        <wv2:WebView2 x:Name="KdpBrowser" Grid.Column="1" />
+             the Amazon login only has to happen once. Wrapped in its own Grid so the address bar
+             sits above it without adding rows to the outer Grid (which would also affect
+             ControlPanel). -->
+        <Grid Grid.Column="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <mc:AddressBar x:Name="BoardAddressBar" Grid.Row="0" />
+            <wv2:WebView2 x:Name="KdpBrowser" Grid.Row="1" />
+        </Grid>
     </Grid>
 </Window>

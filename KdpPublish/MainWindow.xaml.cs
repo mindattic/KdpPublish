@@ -63,6 +63,15 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, KdpReconcileService.GroundTruthResult> groundTruthByCode = new(StringComparer.OrdinalIgnoreCase);
 
     private CancellationTokenSource? runCts;
+
+    /// <summary>Gates the board address bar's Back/Forward/Reload/typed-navigate/Home — nothing
+    /// else stops a manual navigation from racing an in-flight reconciliation run or the idle
+    /// bookshelf scan.</summary>
+    private string? NavigationBlockReason =>
+        runCts is not null ? "Navigation is locked while a reconciliation run is in progress."
+        : shelfScanBusy ? "Navigation is locked while the bookshelf is being scanned."
+        : null;
+
     private KdpRunLogService? runLog;
     private Guid? currentRunId;
     private readonly HashSet<string>? autoRunCodes;
@@ -141,6 +150,10 @@ public partial class MainWindow : Window
 
         var env = await CoreWebView2Environment.CreateAsync(userDataFolder: userDataFolder, options: observation.OptionsFor("board", BoardDebugPort));
         await KdpBrowser.EnsureCoreWebView2Async(env);
+
+        BoardAddressBar.Attach(KdpBrowser.CoreWebView2);
+        BoardAddressBar.NavigationGuard = _ => NavigationBlockReason;
+        BoardAddressBar.NavigationBlocked += (_, e) => _ = PostLogAsync($"⚠ {e.Reason}");
 
         // Any "open in new window" request (target="_blank", window.open(), etc.) redirects
         // back into this same pane instead of spawning an untracked standalone popup window —
