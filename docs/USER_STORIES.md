@@ -38,3 +38,4 @@ _Nothing recorded yet._
 | KP-T15 | 2026-10-16 | docs | closed | Update USER_STORIES.md | — |
 | KP-T16 | 2026-10-19 | chore | open | Convert tracked source files to LF line endings via .gitattributes, per HOUSE-LAW-13 (low priority) | — |
 | KP-T17 | 2026-10-20 | docs | open | Publish KdpPublish docs to GitHub Pages via the shared Toolkit DocFX pipeline: run adopt-docs-site.ps1 (README.md as home page, docs/*.md as articles, API reference only where the code builds in CI), enable Pages with build_type=workflow, set the repo homepage URL, retire tools/build-readme.ps1 and README.htm, confirm the docs Actions run is green and https://mindattic.github.io/KdpPublish/ returns 200. Depends on MAT-T8. | — |
+| KP-T18 | 2026-10-20 | chore | closed | Move to MindAttic.Components.Wpf 19.0.0 (Mc->Ma rename): bump the PackageReference and confirm the build; a scan found no Mc-prefixed style/class usages of its own to rename | 2c76a52 |
