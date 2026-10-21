@@ -23,7 +23,7 @@
     <!-- ArtifactWriter for the tools/kdp diagnostic dumps; vendored in lib/local-packages. -->
     <PackageReference Include="MindAttic.Export" Version="3.0.0" />
     <!-- Theme + AddressBar control for the KdpBrowser pane's chrome; vendored in lib/local-packages. -->
-    <PackageReference Include="MindAttic.Components.Wpf" Version="4.0.0" />
+    <PackageReference Include="MindAttic.Components.Wpf" Version="19.0.0" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3179.45" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.9">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
