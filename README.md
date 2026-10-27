@@ -20,15 +20,18 @@ app needs.
 dotnet build KdpPublish\KdpPublish.csproj -c Release
 ```
 
-Deploy to `C:\Apps\KdpPublish\` with the repo-root `deploy.ps1`. It republishes only when
-source is newer than the deployed exe (stopping any running instance first), and writes
-`C:\Apps\KdpPublish\deploy.bat`, which the desktop shortcut points at: it runs `deploy.ps1`
-(a fast no-op when nothing changed), then starts `KdpPublish.exe` with its arguments.
+Deploy to `C:\Apps\KdpPublish\` with the repo-root `run.ps1`. It republishes only when
+source is newer than the deployed exe (stopping any running instance first), and on every run
+writes `C:\Apps\KdpPublish\run.bat`, which the desktop shortcut points at. A double-click opens
+a menu: **1) Deploy & Run** runs `run.ps1 -Force` (always republishes), then starts
+`KdpPublish.exe`; **2) Run** starts the already-deployed exe as is. Arguments pass through
+either way.
 
 ```
-powershell -ExecutionPolicy Bypass -File deploy.ps1            # publish if changed
-powershell -ExecutionPolicy Bypass -File deploy.ps1 -Force     # clean bin/obj rebuild
-powershell -ExecutionPolicy Bypass -File deploy.ps1 -Launch [args]
+powershell -ExecutionPolicy Bypass -File run.ps1                 # publish if changed
+powershell -ExecutionPolicy Bypass -File run.ps1 -Force          # clean bin/obj rebuild
+powershell -ExecutionPolicy Bypass -File run.ps1 -Launch [args]
+powershell -ExecutionPolicy Bypass -File run.ps1 -LauncherOnly   # rewrite run.bat only
 ```
 
 ## Observing a live run
