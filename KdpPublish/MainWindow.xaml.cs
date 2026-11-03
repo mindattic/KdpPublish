@@ -657,6 +657,9 @@ public partial class MainWindow : Window
         // fixed 1.5 s it wasn't there yet and the step silently did nothing. Wait for it.
         for (var i = 0; i < 20; i++)
         {
+            // A run can start mid-wait (RefreshShelfAsync only checks between steps); the operator
+            // drives this same page, so never change its page size under it.
+            if (runCts != null) return false;
             var present = await kdpBrowser!.EvalAsync(
                 "document.getElementById('refreshedbookshelftable-records-per-page-dropdown') ? 'yes' : 'no'", CancellationToken.None);
             if (present.Contains("yes")) break;
@@ -679,7 +682,8 @@ public partial class MainWindow : Window
             """;
         for (var attempt = 0; attempt < 5; attempt++)
         {
-            var result = await kdpBrowser.EvalAsync(SetFifty, CancellationToken.None);
+            if (runCts != null) return false;
+            var result = await kdpBrowser!.EvalAsync(SetFifty, CancellationToken.None);
             if (result.Contains("done")) return attempt > 0;
             if (result.Contains("missing")) return false;
             await Task.Delay(1500);
@@ -794,7 +798,9 @@ public partial class MainWindow : Window
             // which Mark Unpublished deliberately never clears) so clicking Mark Unpublished after
             // a manual takedown correctly clears this flag too.
             var effectiveStatus = node["publicationStatus"]?.GetValue<string>() ?? e.PublicationStatus;
-            node["heldButLive"] = !e.ReadyToPublish && effectiveStatus == "Published";
+            // "Outdated" is live too (StatusFromShelf: Live + NeedsRepublish), and a held book can
+            // be stale, so it must raise the same flag.
+            node["heldButLive"] = !e.ReadyToPublish && effectiveStatus is "Published" or "Outdated";
 
             rows.Add(node);
         }
