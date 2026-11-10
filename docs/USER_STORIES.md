@@ -41,3 +41,6 @@ _Nothing recorded yet._
 | KP-T18 | 2026-10-20 | chore | closed | Move to MindAttic.Components.Wpf 19.0.0 (Mc->Ma rename): bump the PackageReference and confirm the build; a scan found no Mc-prefixed style/class usages of its own to rename | 2c76a52 |
 | KP-T19 | 2026-10-22 | docs | closed | Update USER_STORIES.md | — |
 | KP-T20 | 2026-10-24 | docs | closed | Update USER_STORIES.md | — |
+| KP-T21 | 2026-11-02 | docs | open | Adopt MindAttic.Agency docs-site pipeline, publish README to GitHub Pages (HOUSE-LAW-14) | — |
+| KP-T22 | 2026-11-02 | fix | closed | Bughunt sweep, two passes: find and fix real bugs across tracked source (user request 2026-11-02) | — |
+| KP-T23 | 2026-11-10 | chore | closed | Crash recovery: commit the command-catalog sync (.agent/commands/*.md) and regenerated docs/USER_STORIES.md left uncommitted by the session crash | — |
