@@ -9,6 +9,7 @@
     <div class="ss-panel">
         <header class="ss-hdr">
             <div class="ss-hdr-counts" id="counts">— tracked</div>
+            <div class="ss-hdr-checked" id="shelf-checked" title="The KDP bookshelf is re-read every minute while no run is going; status changes and run results are pushed to you (psst)."></div>
         </header>
 
         <div class="ss-spinner-wrap" id="loading"><div class="ss-spinner"></div></div>
@@ -293,6 +294,9 @@
                     log.appendChild(div);
                     log.scrollTop = log.scrollHeight;
                 },
+                onShelfChecked: function (text) {
+                    document.getElementById('shelf-checked').textContent = text;
+                },
                 onRunState: function (isRunning) {
                     running = isRunning;
                     render();
@@ -314,6 +318,7 @@
                 entries.forEach(function (e) { counts[e.publicationStatus] = (counts[e.publicationStatus] || 0) + 1; });
                 return {
                     running: running,
+                    shelfChecked: document.getElementById('shelf-checked').textContent,
                     summary: entries.length + ' tracked · ' +
                         Object.keys(counts).map(function (k) { return counts[k] + ' ' + k; }).join(', '),
                     log: Array.from(document.querySelectorAll('#log .ss-log-line')).map(function (d) { return d.textContent; })

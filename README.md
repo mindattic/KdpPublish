@@ -68,6 +68,18 @@ version is on disk), Draft after having been live → "Draft (was live)", In rev
 publishing → Publishing. Hover a status for KDP's raw label. Books not on the bookshelf keep
 the manifest's own status.
 
+While no run is going, the app also re-reads the bookshelf once a minute in the background
+(a fetch, so the KDP pane stays where it is); the header shows when it last checked
+("KDP checked 14:54"). Books in review, which have no edit links, are matched by title.
+
+## Publish alerts
+
+Every change in a book's KDP status (Draft, In review, Live, an ASIN assigned) and every
+book's result at the end of a run (submitted, or not published and why) is written to the
+panel log with a bell and pushed to you through [MindAttic.Psst](https://github.com/mindattic/MindAttic.Psst)
+(`psst test`: a sound at the desk and a text to the configured phone). `psst` must be on PATH;
+set `KDPPUBLISH_NO_PSST=1` to keep alerts to the log.
+
 ## One-off diagnostic launch modes
 
 - `KdpPublish.exe --diagnose <CODE> [details|content|pricing]` — read-only DOM

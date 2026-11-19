@@ -129,6 +129,7 @@ html, body {
     flex-shrink: 0; display: flex; flex-direction: column; gap: 4px;
 }
 .ss-hdr-counts { font-size: 10px; color: #565959; }
+.ss-hdr-checked { font-size: 10px; color: #565959; margin-left: auto; }
 
 .ss-spinner-wrap { display: flex; justify-content: center; padding-top: 24px; }
 .ss-spinner {

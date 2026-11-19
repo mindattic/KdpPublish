@@ -195,6 +195,7 @@ public partial class MainWindow : Window
         KdpBrowser.CoreWebView2.Navigate("https://kdp.amazon.com/en_US/bookshelf");
 
         kdpBrowser = new WebView2KdpBrowser(KdpBrowser.CoreWebView2);
+        StartShelfWatch();
 
         if (crawlCategories != null && !crawlTriggered)
         {
@@ -707,33 +708,12 @@ public partial class MainWindow : Window
     /// </summary>
     private async Task<bool> ScanShelfAsync()
     {
-        var json = await kdpBrowser!.EvalAsync("""
-            (function () {
-                var out = [];
-                var els = document.querySelectorAll('[data-link-parameters]');
-                for (var i = 0; i < els.length; i++) {
-                    var p; try { p = JSON.parse(els[i].getAttribute('data-link-parameters')); } catch (e) { continue; }
-                    if (!p || !p.titleId || !/digital/.test((p.action || '') + (p.id || ''))) continue;
-                    if (out.some(function (o) { return o.titleId === p.titleId; })) continue;
-                    var card = els[i];
-                    while (card.parentElement && ((card.innerText || '').match(/Kindle eBook/g) || []).length < 1) card = card.parentElement;
-                    while (card.parentElement && ((card.parentElement.innerText || '').match(/Kindle eBook/g) || []).length === 1) card = card.parentElement;
-                    var text = (card.innerText || '').replace(/\s+/g, ' ');
-                    var m = text.match(/Kindle eBook (Live Updates publishing|Live|Draft|In [Rr]eview|Publishing|Blocked|Unpublished)/);
-                    var a = text.match(/ASIN:\s*([A-Z0-9]{10})/);
-                    out.push({ titleId: p.titleId, asin: p.asin || (a ? a[1] : null), title: p.title || '',
-                               label: m ? m[1] : null, stage: p.stage || null, liveState: p.liveState || null });
-                }
-                return JSON.stringify(out);
-            })()
-            """, CancellationToken.None);
-        // EvalAsync hands back the script's string; tolerate it arriving JSON-quoted as well.
-        if (json.StartsWith('"')) json = JsonDocument.Parse(json).RootElement.GetString() ?? "[]";
-        var rows = JsonSerializer.Deserialize<List<ShelfRow>>(json, JsonOpts) ?? [];
+        // One parser for this and the once-a-minute background read (MainWindow.ShelfWatch.cs).
+        // It walks each title set, so rows without edit links (In review, Publishing) count too.
+        var rows = await ReadLiveShelfAsync();
         if (rows.Count == 0) return false;
-        shelfByTitleId = rows.ToDictionary(r => r.TitleId, StringComparer.OrdinalIgnoreCase);
-        shelfByAsin = rows.Where(r => !string.IsNullOrEmpty(r.Asin)).GroupBy(r => r.Asin!, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        ApplyShelfRows(rows);
+        await SetShelfCheckedAsync();
         await PostLogAsync($"Read {rows.Count} ebook(s) off the KDP bookshelf: {rows.Count(r => r.Label == "Live")} Live, " +
                            $"{rows.Count(r => r.Label == "Draft")} Draft, {rows.Count(r => r.Label is not ("Live" or "Draft"))} other.");
         return true;
@@ -746,7 +726,8 @@ public partial class MainWindow : Window
         var asin = e.Asin ?? e.LocalPublishMarker?.Asin;
         if (!string.IsNullOrEmpty(asin) && shelfByAsin.TryGetValue(asin, out var byAsin)) return byAsin;
         if (!string.IsNullOrEmpty(e.KdpTitleId) && shelfByTitleId.TryGetValue(e.KdpTitleId, out var byId)) return byId;
-        return null;
+        // In review / Publishing rows have no edit links, so no titleId: place them by title.
+        return string.IsNullOrWhiteSpace(e.Title) ? null : ShelfRowByTitle(e.Title);
     }
 
     /// <summary>The table's status from what KDP itself shows, when the book is on the bookshelf;
@@ -810,6 +791,7 @@ public partial class MainWindow : Window
         var jsArg = JsonSerializer.Serialize(json);
         await TryExecuteScriptAsync(ControlPanel.CoreWebView2, $"window.ssPanel.onManifest({jsArg})");
         await PostLogAsync($"Loaded manifest — {lastManifest.Count} tracked, {lastManifest.Count(e => e.NeedsRepublish)} outdated.");
+        await AnnounceShelfChangesAsync();
     }
 
     /// <summary>
@@ -927,15 +909,22 @@ public partial class MainWindow : Window
         var ctx = new KdpOperatorContext { Browser = kdpBrowser ?? throw new InvalidOperationException("KDP browser pane is not ready.") };
         await PostLogAsync($"Starting sequential pass: {toRun.Count} book(s) in the roster.");
 
+        var outcomes = new Dictionary<string, BookOutcome>(StringComparer.OrdinalIgnoreCase);
+        var cancelled = false;
         try
         {
             await foreach (var (code, evt) in reconcileService.RunAsync(toRun, ctx, groundTruthByCode, ct))
+            {
+                Track(outcomes, code, evt);
                 await PostLogAsync(FormatEvent(code, evt));
+            }
         }
         catch (OperationCanceledException)
         {
+            cancelled = true;
             await PostLogAsync("Pass cancelled.");
         }
+        await AnnounceRunOutcomesAsync(outcomes, toRun, cancelled);
 
         // Re-pull the manifest once at the end (every book was already visited in sequence above;
         // a per-book refresh isn't needed since the pass itself already reflects each confirm/
