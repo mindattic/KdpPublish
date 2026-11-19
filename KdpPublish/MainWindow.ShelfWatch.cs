@@ -68,10 +68,21 @@ public partial class MainWindow
 
     private const string LiveShelfScript = "(function () {\n" + ShelfParseFunction + "\nreturn JSON.stringify(parseShelf(document));\n})()";
 
+    /// <summary>
+    /// The bookshelf table's own refresh call, asking for 50 rows: a plain GET of /bookshelf
+    /// renders KDP's default 10 per page, so the background read would lose every book past the
+    /// tenth. Captured live 2026-11-19 from the page-size dropdown (POST /bookshelf/refresh with
+    /// this JSON). The rows come back inside &lt;script type="text/html"&gt; templates, which a
+    /// DOMParser leaves as text, so those wrappers are stripped before parsing.
+    /// </summary>
     private const string FetchShelfScript =
-        "fetch('/en_US/bookshelf', { credentials: 'include' })" +
+        "fetch('/bookshelf/refresh/ref=xx_xx_cont_xx', { method: 'POST', credentials: 'include'," +
+        " headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }," +
+        " body: JSON.stringify({ action: 'RECORDS_PER_PAGE_CHANGED', pageNumber: 1, recordsPerPage: 50, sortOrder: 'DESCENDING'," +
+        " tableId: 'refreshedbookshelftable', filters: [], clientState: { viewVal: 'UNARCHIVED' } }) })" +
         ".then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })" +
         ".then(function (t) {\n" + ShelfParseFunction +
+        "\nt = t.replace(/<script type=\"text\\/html\">/g, '').replace(/<\\/script>/g, '');" +
         "\nreturn JSON.stringify(parseShelf(new DOMParser().parseFromString(t, 'text/html'))); })";
 
     /// <summary>Started once the KDP pane exists, for the normal interactive/auto-run window only.</summary>
